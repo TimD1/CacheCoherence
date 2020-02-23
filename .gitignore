@@ -1,0 +1,8 @@
+Makefile
+*.C
+._*
+.DS_Store
+msi
+mu
+pingpong*
+twostate*
