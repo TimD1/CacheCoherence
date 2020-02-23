@@ -1,9 +1,9 @@
 
 -- two-state 4-hop VI protocol
 
-----------------------------------------------------------------------
--- Constants
-----------------------------------------------------------------------
+---------------------------------------------------------------------------------
+-- Constants---------------------------------------------------------------------
+---------------------------------------------------------------------------------
 const
 	ProcCount: 3;			-- number processors
 	ValueCount:	 2;			-- number of data values.
@@ -14,17 +14,18 @@ const
 	NetMax: ProcCount+1;
 	
 
-----------------------------------------------------------------------
--- Types
-----------------------------------------------------------------------
+---------------------------------------------------------------------------------
+-- Types-------------------------------------------------------------------------
+---------------------------------------------------------------------------------
 type
 	Proc: scalarset(ProcCount);	  -- unordered range of processors
 	Value: scalarset(ValueCount); -- arbitrary values for tracking coherence
-	Home: enum { HomeType };	  -- need enumeration for IsMember calls
-	Node: union { Home , Proc };
+	Mem: enum { MemType };	  -- need enumeration for IsMember calls
+	Node: union { Mem , Proc };
 
 	VCType: VC0..NumVCs-1;
 
+	-- define enum for message types
 	MessageType: enum {	 
 		ReadReq,				 -- request for data / exclusivity
 		ReadAck,				 -- read ack (w/ data)
@@ -33,24 +34,27 @@ type
 		RecallReq				 -- Request & invalidate a valid copy
 	};
 
+	-- define message
 	Message:
 		Record
 			mtype: MessageType;
 			src: Node;
-			-- do not need a destination for verification; the destination is indicated by which array entry in the Net the message is placed
+			-- do not need a destination for verification; the destination is 
+			-- ndicated by which array entry in the Net the message is placed
 			vc: VCType;
 			val: Value;
 		End;
 
-	HomeState:
+	MemState:
 		Record
 			state: enum { 
-				H_Valid, 
-				H_Invalid,					 --stable states
-				HT_Pending
-			};								 --transient states during recall
+				M_Valid, 					 --stable states
+				M_Invalid,
+				MT_Pending                   -- transient
+			};
 			owner: Node;	
-			--sharers: multiset [ProcCount] of Node;		--No need for sharers in this protocol, but this is a good way to represent them
+			--sharers: multiset [ProcCount] of Node;		
+			--No need for sharers, but this is a good way to represent them
 			val: Value; 
 		End;
 
@@ -65,20 +69,23 @@ type
 			val: Value;
 		End;
 
-----------------------------------------------------------------------
--- Variables
-----------------------------------------------------------------------
+---------------------------------------------------------------------------------
+-- Variables---------------------------------------------------------------------
+---------------------------------------------------------------------------------
 var
-	HomeNode:	HomeState;
+	MemNode: MemState;
 	Procs: array [Proc] of ProcState;
-	Net:   array [Node] of multiset [NetMax] of Message;	-- One multiset for each destination - messages are arbitrarily reordered by the multiset
-	InBox: array [Node] of array [VCType] of Message; -- If a message is not processed, it is placed in InBox, blocking that virtual channel
+	-- One multiset for each dest: messages arbitrarily reordered by multiset
+	Net:   array [Node] of multiset [NetMax] of Message;		
+	-- If a message not processed, placed in InBox, blocking that virtual channel
+	InBox: array [Node] of array [VCType] of Message; 
 	msg_processed: boolean;
-	LastWrite: Value; -- Used to confirm that writes are not lost; this variable would not exist in real hardware
+	-- confirm that writes are not lost; would not exist in real hardware
+	LastWrite: Value; 
 
-----------------------------------------------------------------------
--- Procedures
-----------------------------------------------------------------------
+---------------------------------------------------------------------------------
+-- Procedures--------------------------------------------------------------------
+---------------------------------------------------------------------------------
 Procedure Send(mtype: MessageType;
 				 dst: Node;
 				 src: Node;
@@ -97,7 +104,7 @@ End;
 
 ---------------------------------------------------------------------------------
 
-Procedure ErrorUnhandledMsg(msg:Message; n:Node);
+Procedure ErrorUnhandledMsg(msg: Message; n: Node);
 Begin
 	error "Unhandled message type!";
 End;
@@ -110,12 +117,13 @@ Begin
 End;
 
 /*
--- These aren't needed for Valid/Invalid protocol, but this is a good way of writing these functions
+-- These aren't needed for Valid/Invalid protocol, 
+-- but this is a good way of writing these functions
 Procedure AddToSharersList(n:Node);
 Begin
-	if MultiSetCount(i:HomeNode.sharers, HomeNode.sharers[i] = n) = 0
+	if MultiSetCount(i:MemNode.sharers, MemNode.sharers[i] = n) = 0
 	then
-		MultiSetAdd(n, HomeNode.sharers);
+		MultiSetAdd(n, MemNode.sharers);
 	endif;
 End;
 
@@ -123,14 +131,14 @@ End;
 
 Function IsSharer(n:Node) : Boolean;
 Begin
-	return MultiSetCount(i:HomeNode.sharers, HomeNode.sharers[i] = n) > 0
+	return MultiSetCount(i:MemNode.sharers, MemNode.sharers[i] = n) > 0
 End;
 
 ---------------------------------------------------------------------------------
 
 Procedure RemoveFromSharersList(n:Node);
 Begin
-	MultiSetRemovePred(i:HomeNode.sharers, HomeNode.sharers[i] = n);
+	MultiSetRemovePred(i:MemNode.sharers, MemNode.sharers[i] = n);
 End;
 
 ---------------------------------------------------------------------------------
@@ -140,7 +148,7 @@ Procedure SendInvReqToSharers(rqst:Node);
 Begin
 	for n:Node do
 		if (IsMember(n, Proc) &
-				MultiSetCount(i:HomeNode.sharers, HomeNode.sharers[i] = n) != 0)
+				MultiSetCount(i:MemNode.sharers, MemNode.sharers[i] = n) != 0)
 		then
 			if n != rqst
 			then 
@@ -153,72 +161,74 @@ End;
 
 ---------------------------------------------------------------------------------
 
-Procedure HomeReceive(msg:Message);
+-- memory controller is receiving a message
+Procedure MemReceive(msg: Message);
 var cnt: 0..ProcCount;	-- for counting sharers
 Begin
 -- Debug output may be helpful:
 --	put "Receiving "; put msg.mtype; put " on VC"; put msg.vc; 
---	put " at home -- "; put HomeNode.state;
+--	put " at mem -- "; put MemNode.state;
 
 	-- The line below is not needed in Valid/Invalid protocol.	However, the 
 	-- compiler barfs if we put this inside a switch, so it is useful to
 	-- pre-calculate the sharer count here
-	--cnt := MultiSetCount(i:HomeNode.sharers, true);
+	--cnt := MultiSetCount(i:MemNode.sharers, true);
 
 
 	-- default to 'processing' message.	set to false otherwise
 	msg_processed := true;
 
-	switch HomeNode.state
-	case H_Invalid:
-		switch msg.mtype
+	switch MemNode.state
+	case M_Invalid: -- memory unused by processors
 
-		case ReadReq:
-			HomeNode.state := H_Valid;
-			HomeNode.owner := msg.src;
-			Send(ReadAck, msg.src, HomeType, VC1, HomeNode.val);
+		switch msg.mtype
+		case ReadReq: -- reading is really the only valid operation
+			MemNode.state := M_Valid;
+			MemNode.owner := msg.src;
+			Send(ReadAck, msg.src, MemType, VC1, MemNode.val);
 
 		else
-			ErrorUnhandledMsg(msg, HomeType);
+			ErrorUnhandledMsg(msg, MemType);
 
 		endswitch;
 
-	case H_Valid:
-		Assert (IsUndefined(HomeNode.owner) = false) 
-			 "HomeNode has no owner, but line is Valid";
+	case M_Valid: -- a processor already owns the data
+	    -- make sure we know who owns the data
+		Assert (IsUndefined(MemNode.owner) = false) 
+			 "MemNode has no owner, but line is Valid";
 
 		switch msg.mtype
-		case ReadReq:
-			HomeNode.state := HT_Pending;		 
-			Send(RecallReq, HomeNode.owner, HomeType, VC0, UNDEFINED);
-			HomeNode.owner := msg.src; --remember who the new owner will be
+		case ReadReq: -- we'll need to switch who owns the data
+			MemNode.state := MT_Pending;		 
+			Send(RecallReq, MemNode.owner, MemType, VC0, UNDEFINED);
+			MemNode.owner := msg.src; --remember who the new owner will be
 						
-		case WBReq:
-			assert (msg.src = HomeNode.owner) "Writeback from non-owner";
-			HomeNode.state := H_Invalid;
-			HomeNode.val := msg.val;
-			Send(WBAck, msg.src, HomeType, VC1, UNDEFINED);
-			undefine HomeNode.owner
+		case WBReq: -- processor giving up ownership
+			assert (msg.src = MemNode.owner) "Writeback from non-owner";
+			MemNode.state := M_Invalid;
+			MemNode.val := msg.val;
+			Send(WBAck, msg.src, MemType, VC1, UNDEFINED);
+			undefine MemNode.owner
 
 		else
-			ErrorUnhandledMsg(msg, HomeType);
+			ErrorUnhandledMsg(msg, MemType);
 
 		endswitch;
 
-	case HT_Pending:
+	case MT_Pending: -- read was requested, but someone else owned it
 		switch msg.mtype
 	 
-		case WBReq:
-			Assert (!IsUnDefined(HomeNode.owner)) "owner undefined";
-			HomeNode.state := H_Valid;
-			HomeNode.val := msg.val;
-			Send(ReadAck, HomeNode.owner, HomeType, VC1, HomeNode.val);
+		case WBReq:  -- we've retrieved the data from the proc which owned it
+			Assert (!IsUnDefined(MemNode.owner)) "owner undefined";
+			MemNode.state := M_Valid;
+			MemNode.val := msg.val;
+			Send(ReadAck, MemNode.owner, MemType, VC1, MemNode.val);
 
 		case ReadReq:
 			msg_processed := false; -- stall message in InBox
 
 		else
-			ErrorUnhandledMsg(msg, HomeType);
+			ErrorUnhandledMsg(msg, MemType);
 
 		endswitch;
 	endswitch;
@@ -268,16 +278,14 @@ Begin
 		case WBAck:
 			ps := P_Invalid;
 			undefine pv;
-		case RecallReq:				-- treat a recall request as a Writeback acknowledgement
+		case RecallReq:	-- treat a recall request as a Writeback acknowledgement
 			ps := P_Invalid;
 			undefine pv;
 		else
 			ErrorUnhandledMsg(msg, p);
 		endswitch;
 
-	----------------------------
 	-- Error catch
-	----------------------------
 	else
 		ErrorUnhandledState();
 
@@ -287,28 +295,29 @@ Begin
 	endalias;
 End;
 
-----------------------------------------------------------------------
--- Rules
-----------------------------------------------------------------------
+---------------------------------------------------------------------------------
+-- Rules-------------------------------------------------------------------------
+---------------------------------------------------------------------------------
 
 -- Processor actions (affecting coherency)
 
-ruleset n:Proc Do
-	alias p:Procs[n] Do
+ruleset n: Proc Do
+	alias p: Procs[n] Do
 
-	ruleset v:Value Do
+	ruleset v: Value Do
 		rule "store new value"
 			(p.state = P_Valid)
 			==>
 				p.val := v;			
-				LastWrite := v;	--We use LastWrite to sanity check that reads receive the value of the last write
+				--use LastWrite to check reads receive the value of last write
+				LastWrite := v;	
 		endrule;
 	endruleset;
 
 	rule "read request"
 		p.state = P_Invalid 
 	==>
-		Send(ReadReq, HomeType, n, VC0, UNDEFINED);
+		Send(ReadReq, MemType, n, VC0, UNDEFINED);
 		p.state := PT_Pending;
 	endrule;
 
@@ -316,7 +325,7 @@ ruleset n:Proc Do
 	rule "writeback"
 		(p.state = P_Valid)
 	==>
-		Send(WBReq, HomeType, n, VC1, p.val); 
+		Send(WBReq, MemType, n, VC1, p.val); 
 		p.state := PT_WritebackPending;
 		undefine p.val;
 	endrule;
@@ -327,27 +336,27 @@ endruleset;
 ---------------------------------------------------------------------------------
 
 -- Message delivery rules
-ruleset n:Node do
-	choose midx:Net[n] do
-		alias chan:Net[n] do
-		alias msg:chan[midx] do
-		alias box:InBox[n] do
+ruleset n: Node do
+	choose midx: Net[n] do
+		alias chan: Net[n] do
+		alias msg: chan[midx] do
+		alias box: InBox[n] do
 
 		-- Pick a random message in the network and delivier it
 		rule "receive-net"
 			(isundefined(box[msg.vc].mtype))
 		==>
 
-			if IsMember(n, Home)
+			if IsMember(n, Mem)
 			then
-				HomeReceive(msg);
+				MemReceive(msg);
 			else
 				ProcReceive(msg, n);
 			endif;
 
 			if ! msg_processed
 			then
-				-- The node refused the message, stick it in the InBox to block the VC.
+				-- The node refused the message, put in InBox to block the VC.
 				box[msg.vc] := msg;
 			endif;
 		
@@ -360,14 +369,14 @@ ruleset n:Node do
 		endalias;
 	endchoose;	
 
-	-- Try to deliver a message from a blocked VC; perhaps the node can handle it now
-	ruleset vc:VCType do
+	-- Try to deliver a message from a blocked VC; perhaps node can handle it now
+	ruleset vc: VCType do
 		rule "receive-blocked-vc"
 			(! isundefined(InBox[n][vc].mtype))
 		==>
-			if IsMember(n, Home)
+			if IsMember(n, Mem)
 			then
-				HomeReceive(InBox[n][vc]);
+				MemReceive(InBox[n][vc]);
 			else
 				ProcReceive(InBox[n][vc], n);
 			endif;
@@ -383,21 +392,21 @@ ruleset n:Node do
 
 endruleset;
 
-----------------------------------------------------------------------
--- Startstate
-----------------------------------------------------------------------
+---------------------------------------------------------------------------------
+-- Startstate--------------------------------------------------------------------
+---------------------------------------------------------------------------------
 startstate
 
-	For v:Value do
-	-- home node initialization
-	HomeNode.state := H_Invalid;
-	undefine HomeNode.owner;
-	HomeNode.val := v;
+	For v: Value do
+		-- mem node initialization
+		MemNode.state := M_Invalid;
+		undefine MemNode.owner;
+		MemNode.val := v;
 	endfor;
-	LastWrite := HomeNode.val;
+	LastWrite := MemNode.val;
 	
 	-- processor initialization
-	for i:Proc do
+	for i: Proc do
 		Procs[i].state := P_Invalid;
 		undefine Procs[i].val;
 	endfor;
@@ -406,21 +415,21 @@ startstate
 	undefine Net;
 endstartstate;
 
-----------------------------------------------------------------------
--- Invariants
-----------------------------------------------------------------------
+---------------------------------------------------------------------------------
+-- Invariants--------------------------------------------------------------------
+---------------------------------------------------------------------------------
 
 invariant "Invalid implies empty owner"
-	HomeNode.state = H_Invalid
+	MemNode.state = M_Invalid
 		->
-			IsUndefined(HomeNode.owner);
+			IsUndefined(MemNode.owner);
 
 ---------------------------------------------------------------------------------
 
 invariant "value in memory matches value of last write, when invalid"
-		 HomeNode.state = H_Invalid 
+		 MemNode.state = M_Invalid 
 		->
-			HomeNode.val = LastWrite;
+			MemNode.val = LastWrite;
 
 ---------------------------------------------------------------------------------
 
@@ -428,7 +437,7 @@ invariant "values in valid state match last write"
 	Forall n : Proc Do	
 		 Procs[n].state = P_Valid
 		->
-			Procs[n].val = LastWrite --LastWrite is updated whenever a new value is created 
+			Procs[n].val = LastWrite --LastWrite updated when new value created 
 	end;
 
 ---------------------------------------------------------------------------------
@@ -446,32 +455,32 @@ invariant "value is undefined while invalid"
 -- Here are some invariants that are helpful for validating shared state.
 
 invariant "modified implies empty sharers list"
-	HomeNode.state = H_Modified
+	MemNode.state = M_Modified
 		->
-			MultiSetCount(i:HomeNode.sharers, true) = 0;
+			MultiSetCount(i:MemNode.sharers, true) = 0;
 
 ---------------------------------------------------------------------------------
 
 invariant "Invalid implies empty sharer list"
-	HomeNode.state = H_Invalid
+	MemNode.state = M_Invalid
 		->
-			MultiSetCount(i:HomeNode.sharers, true) = 0;
+			MultiSetCount(i:MemNode.sharers, true) = 0;
 
 ---------------------------------------------------------------------------------
 
 invariant "values in memory matches value of last write, when shared or invalid"
 	Forall n : Proc Do	
-		 HomeNode.state = H_Shared | HomeNode.state = H_Invalid
+		 MemNode.state = M_Shared | MemNode.state = M_Invalid
 		->
-			HomeNode.val = LastWrite
+			MemNode.val = LastWrite
 	end;
 
 ---------------------------------------------------------------------------------
 
 invariant "values in shared state match memory"
 	Forall n : Proc Do	
-		 HomeNode.state = H_Shared & Procs[n].state = P_Shared
+		 MemNode.state = M_Shared & Procs[n].state = P_Shared
 		->
-			HomeNode.val = Procs[n].val
+			MemNode.val = Procs[n].val
 	end;
 */	
