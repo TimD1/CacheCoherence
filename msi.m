@@ -1,15 +1,14 @@
 
--- two-state 4-hop VI protocol
+-- standard MSI protocol
 
 ---------------------------------------------------------------------------------
 -- Constants---------------------------------------------------------------------
 ---------------------------------------------------------------------------------
 const
 	ProcCount: 3;			-- number processors
-	ValueCount:	 2;			-- number of data values.
-	VC0: 0;					-- low priority
-	VC1: 1;
-	QMax: 2;
+	ValueCount:	 2;			-- number of data values
+	VC0: 0;					-- low priority virtual channel
+	VC1: 1;					-- high priority virtual channel
 	NumVCs: VC1 - VC0 + 1;
 	NetMax: ProcCount+1;
 	
@@ -18,9 +17,9 @@ const
 -- Types-------------------------------------------------------------------------
 ---------------------------------------------------------------------------------
 type
-	Proc: scalarset(ProcCount);	  -- unordered range of processors
-	Value: scalarset(ValueCount); -- arbitrary values for tracking coherence
-	Mem: enum { MemType };	  -- need enumeration for IsMember calls
+	Proc: scalarset(ProcCount);	  	-- unordered range of processors
+	Value: scalarset(ValueCount); 	-- arbitrary values for tracking coherence
+	Mem: enum { MemType };	  		-- need enumeration for IsMember calls
 	Node: union { Mem , Proc };
 
 	VCType: VC0..NumVCs-1;
@@ -40,7 +39,7 @@ type
 			mtype: MessageType;
 			src: Node;
 			-- do not need a destination for verification; the destination is 
-			-- ndicated by which array entry in the Net the message is placed
+			-- indicated by which array entry in the Net the message is placed
 			vc: VCType;
 			val: Value;
 		End;
@@ -300,20 +299,20 @@ End;
 ---------------------------------------------------------------------------------
 
 -- Processor actions (affecting coherency)
-
 ruleset n: Proc Do
 	alias p: Procs[n] Do
 
+	-- any processor can decide to store any value
 	ruleset v: Value Do
 		rule "store new value"
 			(p.state = P_Valid)
 			==>
 				p.val := v;			
-				--use LastWrite to check reads receive the value of last write
-				LastWrite := v;	
+				LastWrite := v;	--ensure reads receive value of last write
 		endrule;
 	endruleset;
 
+	-- any processor can decide to read
 	rule "read request"
 		p.state = P_Invalid 
 	==>
@@ -321,7 +320,7 @@ ruleset n: Proc Do
 		p.state := PT_Pending;
 	endrule;
 
-
+	-- any processor can write back data
 	rule "writeback"
 		(p.state = P_Valid)
 	==>
@@ -337,12 +336,13 @@ endruleset;
 
 -- Message delivery rules
 ruleset n: Node do
+	-- choose a random message index for this Node
 	choose midx: Net[n] do
 		alias chan: Net[n] do
 		alias msg: chan[midx] do
 		alias box: InBox[n] do
 
-		-- Pick a random message in the network and delivier it
+		-- Pick a random message in the network and deliver it
 		rule "receive-net"
 			(isundefined(box[msg.vc].mtype))
 		==>
@@ -397,8 +397,8 @@ endruleset;
 ---------------------------------------------------------------------------------
 startstate
 
+	-- mem node initialization
 	For v: Value do
-		-- mem node initialization
 		MemNode.state := M_Invalid;
 		undefine MemNode.owner;
 		MemNode.val := v;
