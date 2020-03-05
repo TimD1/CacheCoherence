@@ -6,7 +6,7 @@
 ---------------------------------------------------------------------------------
 const
 	ProcCount: 3;			-- number of processors
-	ValueCount:	 2;			-- number of data values
+	ValueCount:	 3;			-- number of data values
 	NumVCs: 3;				-- number of virtual channels
 	RequestChannel: 0;		-- virtual channel #0
 	ForwardChannel: 1;		-- virtual channel #1
@@ -25,7 +25,6 @@ type
 
 	VCType: 0..NumVCs-1;
 	AckCount: 0..ProcCount-1;
-	ProcRange: 0..ProcCount;
 
 	-- define enum for message types
 	MessageType: enum {	 
@@ -50,7 +49,7 @@ type
 			-- indicated by which array entry in the Net the message is placed
 			vc: VCType;
 			val: Value;
-			who: ProcRange; -- tells procs which proc to forward data to
+			who: Node; -- tells procs which proc to forward data to
 			ack: AckCount;	-- needed for Data messages to count expected Acks
 		end;
 
@@ -109,7 +108,7 @@ procedure Send(mtype: MessageType;
 				 src: Node;
 				 vc: VCType;
 				 val: Value;
-				 who: ProcRange;
+				 who: Node;
 				 ack: AckCount;
 			 );
 var msg: Message;
@@ -210,6 +209,7 @@ begin
 		case GetM:
 			MemNode.state := M_M;
 			MemNode.owner := msg.src;
+			undefine MemNode.sharers;
 			Send(Data, msg.src, MemType, ResponseChannel, MemNode.val, UNDEFINED, cnt);
 		case PutS:
 			Send(PutAck, msg.src, MemType, ForwardChannel, UNDEFINED, UNDEFINED, UNDEFINED);
@@ -229,7 +229,8 @@ begin
 		case GetM:
 			MemNode.state := M_M;
 			MemNode.owner := msg.src;
-			Send(Data, msg.src, MemType, ResponseChannel, MemNode.val, UNDEFINED, cnt);
+			-- don't need to wait for yourself to Ack
+			Send(Data, msg.src, MemType, ResponseChannel, MemNode.val, UNDEFINED, cnt-1);
 			SendInvReqToSharers(msg.src);
 			undefine MemNode.sharers;
 		case PutS:
@@ -268,7 +269,7 @@ begin
 				LastWrite := MemNode.val;
 				undefine MemNode.owner;
 				MemNode.state := M_I;
-			endif
+			endif;
 			Send(PutAck, msg.src, MemType, ForwardChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 		else
 			ErrorUnhandledMsg(msg, MemType);
@@ -318,7 +319,16 @@ begin
 	switch pstate
 	case P_I:
 		-- processor shouldn't receive any messages when in Invalid state
-		ErrorUnhandledMsg(msg, p);
+		switch msg.mtype
+		case FwdGetS:
+			msg_processed := false;
+		case FwdGetM:
+			msg_processed := false;
+		case Inv:
+			Send(InvAck, msg.src, p, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+		else
+			ErrorUnhandledMsg(msg, p);
+		endswitch;
 
 	case P_IS_D:
 		switch msg.mtype
@@ -351,10 +361,10 @@ begin
 					pstate := P_IM_A;
 					packs_needed := msg.ack;
 					-- don't reset packs_received
-				endif
+				endif;
 			else -- data is from another processor
 				pstate := P_M;
-			endif
+			endif;
 			pval := msg.val;
 		case InvAck:
 			packs_received := packs_received + 1;
@@ -375,7 +385,7 @@ begin
 				packs_needed := 0;
 				packs_received := 0;
 				pstate := P_M;
-			endif
+			endif;
 		else
 			ErrorUnhandledMsg(msg, p);
 		endswitch;
@@ -385,6 +395,7 @@ begin
 		case Inv:
 			pstate := P_I;
 			Send(InvAck, msg.src, p, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+			undefine pval;
 		else
 			ErrorUnhandledMsg(msg, p);
 		endswitch;
@@ -410,10 +421,10 @@ begin
 					pstate := P_SM_A;
 					packs_needed := msg.ack;
 					-- don't reset packs_received
-				endif
+				endif;
 			else -- data is from another processor
 				pstate := P_M;
-			endif
+			endif;
 			pval := msg.val;
 		case InvAck:
 			packs_received := packs_received + 1;
@@ -434,7 +445,7 @@ begin
 				packs_needed := 0;
 				packs_received := 0;
 				pstate := P_M;
-			endif
+			endif;
 		else
 			ErrorUnhandledMsg(msg, p);
 		endswitch;
@@ -444,10 +455,13 @@ begin
 		case FwdGetS:
 			pstate := P_S;
 			Send(Data, MemType, p, ResponseChannel, pval, UNDEFINED, UNDEFINED);
-			Send(Data, msg.who, p, ResponseChannel, pval, UNDEFINED, UNDEFINED);
+			Send(Data, msg.who, p, ResponseChannel, pval, UNDEFINED, 0);
 		case FwdGetM:
 			pstate := P_I;
-			Send(Data, msg.who, p, ResponseChannel, pval, UNDEFINED, UNDEFINED);
+			Send(Data, msg.who, p, ResponseChannel, pval, UNDEFINED, 0);
+			undefine pval;
+		case InvAck:
+			-- do nothing
 		else
 			ErrorUnhandledMsg(msg, p);
 		endswitch;
@@ -457,12 +471,15 @@ begin
 		case FwdGetS:
 			pstate := P_SI_A;
 			Send(Data, MemType, p, ResponseChannel, pval, UNDEFINED, UNDEFINED);
-			Send(Data, msg.who, p, ResponseChannel, pval, UNDEFINED, UNDEFINED);
+			Send(Data, msg.who, p, ResponseChannel, pval, UNDEFINED, 0);
 		case FwdGetM:
 			pstate := P_II_A;
-			Send(Data, msg.who, p, ResponseChannel, pval, UNDEFINED, UNDEFINED);
+			Send(Data, msg.who, p, ResponseChannel, pval, UNDEFINED, 0);
 		case PutAck:
 			pstate := P_I;
+			undefine pval;
+		case InvAck:
+			-- do nothing
 		else
 			ErrorUnhandledMsg(msg, p);
 		endswitch;
@@ -474,6 +491,7 @@ begin
 			Send(InvAck, msg.src, p, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 		case PutAck:
 			pstate := P_I;
+			undefine pval;
 		else
 			ErrorUnhandledMsg(msg, p);
 		endswitch;
@@ -482,6 +500,7 @@ begin
 		switch msg.mtype
 		case PutAck:
 			pstate := P_I;
+			undefine pval;
 		else
 			ErrorUnhandledMsg(msg, p);
 		endswitch;
@@ -504,7 +523,7 @@ end;
 ruleset n: Proc do
 	alias p: Procs[n] do
 
-	rule "processor in Invalid state, requesting to load value"
+	rule "Processor in Invalid state, requesting to load value"
 		(p.state = P_I)
 	==>
 		Send(GetS, MemType, n, RequestChannel, UNDEFINED, UNDEFINED, UNDEFINED);
@@ -512,7 +531,7 @@ ruleset n: Proc do
 	endrule;
 
 	ruleset v: Value do
-		rule "processor in Invalid state, requesting to store value"
+		rule "Processor in Invalid state, requesting to store value"
 			(p.state = P_I)
 		==>
 			Send(GetM, MemType, n, RequestChannel, UNDEFINED, UNDEFINED, UNDEFINED);
@@ -521,7 +540,7 @@ ruleset n: Proc do
 	endruleset;
 
 	ruleset v: Value do
-		rule "processor in Shared state, requesting to store value"
+		rule "Processor in Shared state, requesting to store value"
 			(p.state = P_S)
 		==>
 			Send(GetM, MemType, n, RequestChannel, UNDEFINED, UNDEFINED, UNDEFINED);
@@ -529,14 +548,14 @@ ruleset n: Proc do
 		endrule;
 	endruleset;
 
-	rule "processor in Shared state, evicting value"
+	rule "Processor in Shared state, evicting value"
 		(p.state = P_S)
 	==>
 		Send(PutS, MemType, n, RequestChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 		p.state := P_SI_A;
 	endrule;
 
-	rule "processor in Modified state, evicting value"
+	rule "Processor in Modified state, evicting value"
 		(p.state = P_M)
 	==>
 		Send(PutM, MemType, n, RequestChannel, p.val, UNDEFINED, UNDEFINED);
@@ -557,7 +576,7 @@ ruleset n: Node do
 		alias box: InBox[n] do
 
 		-- Pick a random message in the network and deliver it
-		rule "receive-net"
+		rule "Receive-net"
 			(isundefined(box[msg.vc].mtype))
 		==>
 
@@ -625,7 +644,7 @@ startstate
 		Procs[i].state := P_I;
 		undefine Procs[i].val;
 		undefine Procs[i].acks_needed;
-		undefine Procs[i].acks_received;
+		Procs[i].acks_received := 0;
 	endfor;
 
 	-- network initialization
@@ -643,14 +662,14 @@ invariant "Invalid implies empty owner"
 
 ---------------------------------------------------------------------------------
 
-invariant "value in memory matches value of last write, when invalid"
+invariant "Value in memory matches value of last write, when invalid"
 		 MemNode.state = M_I
 		->
 			MemNode.val = LastWrite;
 
 ---------------------------------------------------------------------------------
 	
-invariant "value is undefined while invalid"
+invariant "Value is undefined while invalid"
 	Forall n : Proc Do	
 		 Procs[n].state = P_I
 		->
@@ -659,7 +678,7 @@ invariant "value is undefined while invalid"
 	
 ---------------------------------------------------------------------------------
 
-invariant "modified implies empty sharers list"
+invariant "Modified implies empty sharers list"
 	MemNode.state = M_M
 		->
 			MultiSetCount(i: MemNode.sharers, true) = 0;
@@ -673,7 +692,7 @@ invariant "Invalid implies empty sharer list"
 
 ---------------------------------------------------------------------------------
 
-invariant "values in memory matches value of last write, when shared or invalid"
+invariant "Values in memory matches value of last write, when shared or invalid"
 	Forall n : Proc Do	
 		 MemNode.state = M_S | MemNode.state = M_I
 		->
@@ -682,7 +701,7 @@ invariant "values in memory matches value of last write, when shared or invalid"
 
 ---------------------------------------------------------------------------------
 
-invariant "values in shared state match memory"
+invariant "Values in shared state match memory"
 	Forall n : Proc Do	
 		 MemNode.state = M_S & Procs[n].state = P_S
 		->
