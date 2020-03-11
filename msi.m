@@ -67,7 +67,7 @@ type
 				M_MS_DA,
 				M_XM_A,
 				M_XS_A,
-				M_I_P
+				M_I_P,
 				M_S_P,
 				M_M_P
 			};
@@ -86,7 +86,7 @@ type
 				P_S,
 				P_SM_AD,
 				P_SM_A,
-				P_M
+				P_M,
 				P_MI_A,
 				P_SI_A,
 				P_II_A,
@@ -257,11 +257,10 @@ begin
 			MemNode.owner := msg.src;
 		case PutS:
 			Send(PutAck, msg.src, MemType, ForwardChannel, UNDEFINED, UNDEFINED, UNDEFINED);
-			if cnt = 1
+			if cnt = 1 then
 				MemNode.state := M_I_P;
-			then
-				MemNode.state := M_S_P;
 			else
+				MemNode.state := M_S_P;
 			endif;
 			RemoveFromSharersList(msg.src);
 		case PutM:
@@ -277,7 +276,7 @@ begin
 		assert (!IsUnDefined(MemNode.owner)) "owner undefined";
 		switch msg.mtype
 		case GetS:
-			MemNode.state := M_S_DA;
+			MemNode.state := M_MS_DA;
 			AddToSharersList(msg.src);
 			AddToSharersList(MemNode.owner);
 			Send(FwdGetS, MemNode.owner, MemType, ForwardChannel, UNDEFINED, msg.src, UNDEFINED);
