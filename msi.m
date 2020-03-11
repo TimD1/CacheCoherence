@@ -656,6 +656,7 @@ ruleset n: Proc do
 	rule "Processor in Invalid state, requesting to load value"
 		(p.state = P_I)
 	==>
+		put n; put " sending GetS from state "; put p.state;
 		Send(GetS, MemType, n, RequestChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 		p.state := P_IS_D;
 	endrule;
@@ -664,6 +665,7 @@ ruleset n: Proc do
 		rule "Processor in Invalid state, requesting to store value"
 			(p.state = P_I)
 		==>
+			put n; put " sending GetM from state "; put p.state;
 			Send(GetM, MemType, n, RequestChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 			p.state := P_IM_AD;
 		endrule;
@@ -673,6 +675,7 @@ ruleset n: Proc do
 		rule "Processor in Shared state, requesting to store value"
 			(p.state = P_S)
 		==>
+			put n; put " sending GetM from state "; put p.state;
 			Send(GetM, MemType, n, RequestChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 			p.state := P_SM_AD;
 		endrule;
@@ -681,6 +684,7 @@ ruleset n: Proc do
 	rule "Processor in Shared state, evicting value"
 		(p.state = P_S)
 	==>
+		put n; put " evicting from state "; put p.state;
 		Send(PutS, MemType, n, RequestChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 		p.state := P_SI_A;
 	endrule;
@@ -688,6 +692,7 @@ ruleset n: Proc do
 	rule "Processor in Modified state, evicting value"
 		(p.state = P_M)
 	==>
+		put n; put " evicting from state "; put p.state;
 		Send(PutM, MemType, n, RequestChannel, p.val, UNDEFINED, UNDEFINED);
 		p.state := P_MI_A;
 	endrule;
