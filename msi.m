@@ -6,7 +6,7 @@
 ---------------------------------------------------------------------------------
 const
 	ProcCount: 3;			-- number of processors
-	ValueCount:	 3;			-- number of data values
+	ValueCount:	3;			-- number of data values
 	NumVCs: 4;				-- number of virtual channels
 	RequestChannel: 0;		-- virtual channel #0
 	ForwardChannel: 1;		-- virtual channel #1
@@ -289,8 +289,7 @@ begin
 			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 			DirNode.state := M_M_P;
 		case PutM:
-			if DirNode.owner = msg.src
-			then
+			if DirNode.owner = msg.src then
 				DirNode.val := msg.val;
 				LastWrite := DirNode.val;
 				undefine DirNode.owner;
@@ -318,9 +317,15 @@ begin
 			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 			DirNode.state := M_MS_DP
 		case Data:
-			DirNode.state := M_S;
-			DirNode.val := msg.val;
-			LastWrite := DirNode.val;
+			if cnt > 0 then
+				DirNode.state := M_S;
+				DirNode.val := msg.val;
+				LastWrite := DirNode.val;
+			else
+				DirNode.state := M_I;
+				DirNode.val := msg.val;
+				LastWrite := DirNode.val;
+			endif;
 		else
 			ErrorUnhandledMsg(msg, DirType);
 		endswitch;
@@ -368,7 +373,11 @@ begin
 	case M_S_P:
 		switch msg.mtype
 		case PutAckAck:
-			DirNode.state := M_S;
+			if cnt > 0 then
+				DirNode.state := M_S;
+			else
+				DirNode.state := M_I;
+			endif;
 		else
 			msg_processed := false;
 		endswitch;
@@ -827,10 +836,24 @@ invariant "Value is undefined while invalid"
 	
 ---------------------------------------------------------------------------------
 
-invariant "Modified implies empty sharers list"
+invariant "Shared implies non-empty sharer list"
+	DirNode.state = M_S
+		->
+			MultiSetCount(i: DirNode.sharers, true) > 0;
+
+---------------------------------------------------------------------------------
+
+invariant "Modified implies empty sharer list"
 	DirNode.state = M_M
 		->
 			MultiSetCount(i: DirNode.sharers, true) = 0;
+
+---------------------------------------------------------------------------------
+
+invariant "Modified implies owner exists"
+	DirNode.state = M_M
+		->
+			!IsUndefined(DirNode.owner);
 
 ---------------------------------------------------------------------------------
 
