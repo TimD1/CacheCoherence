@@ -6,7 +6,7 @@
 ---------------------------------------------------------------------------------
 const
 	ProcCount: 3;			-- number of processors
-	ValueCount:	 2;			-- number of data values
+	ValueCount:	 3;			-- number of data values
 	NumVCs: 4;				-- number of virtual channels
 	RequestChannel: 0;		-- virtual channel #0
 	ForwardChannel: 1;		-- virtual channel #1
@@ -21,8 +21,8 @@ const
 type
 	Proc: scalarset(ProcCount);	  	-- unordered range of processors
 	Value: scalarset(ValueCount); 	-- arbitrary values for tracking coherence
-	Mem: enum { MemType };	  		-- need enumeration for IsMember calls
-	Node: union { Mem , Proc };		-- track node type
+	Dir: enum { DirType };	  		-- need enumeration for IsMember calls
+	Node: union { Dir , Proc };		-- track node type
 
 	VCType: 0..NumVCs-1;
 	AckCount: 0..ProcCount-1;
@@ -56,7 +56,7 @@ type
 			ack: AckCount;	-- needed for Data messages to count expected Acks
 		end;
 
-	MemState:
+	DirState:
 		Record
 			state: enum { -- directory controller states
 				M_I,
@@ -104,7 +104,7 @@ type
 -- Variables---------------------------------------------------------------------
 ---------------------------------------------------------------------------------
 var
-	MemNode: MemState;
+	DirNode: DirState;
 	Procs: array [Proc] of ProcState;
 	-- One multiset for each dest: messages arbitrarily reordered by multiset
 	Net:   array [Node] of multiset [NetMax] of Message;		
@@ -155,9 +155,9 @@ end;
 
 procedure AddToSharersList(n: Node);
 begin
-	if MultiSetCount(i: MemNode.sharers, MemNode.sharers[i] = n) = 0
+	if MultiSetCount(i: DirNode.sharers, DirNode.sharers[i] = n) = 0
 	then
-		MultiSetAdd(n, MemNode.sharers);
+		MultiSetAdd(n, DirNode.sharers);
 	endif;
 end;
 
@@ -165,14 +165,14 @@ end;
 
 Function IsSharer(n: Node) : Boolean;
 begin
-	return MultiSetCount(i: MemNode.sharers, MemNode.sharers[i] = n) > 0
+	return MultiSetCount(i: DirNode.sharers, DirNode.sharers[i] = n) > 0
 end;
 
 ---------------------------------------------------------------------------------
 
 procedure RemoveFromSharersList(n: Node);
 begin
-	MultiSetRemovePred(i: MemNode.sharers, MemNode.sharers[i] = n);
+	MultiSetRemovePred(i: DirNode.sharers, DirNode.sharers[i] = n);
 end;
 
 ---------------------------------------------------------------------------------
@@ -183,7 +183,7 @@ begin
 	for n: Node do
 		-- if it's a processor and is a sharer
 		if (IsMember(n, Proc) &
-				MultiSetCount(i: MemNode.sharers, MemNode.sharers[i] = n) != 0)
+				MultiSetCount(i: DirNode.sharers, DirNode.sharers[i] = n) != 0)
 		then
 			-- don't invalidate the requestor
 			if n != rqst
@@ -198,112 +198,109 @@ end;
 ---------------------------------------------------------------------------------
 
 -- memory controller is receiving a message
-procedure MemReceive(msg: Message);
+procedure DirReceive(msg: Message);
 var cnt: 0..ProcCount;	-- for counting sharers
 begin
 
 	-- Debug output may be helpful:
-	put "Mem receiving "; put msg.mtype; put " from "; put msg.src; put ", state ->";
+	/* put "Dir receiving "; put msg.mtype; put " from "; put msg.src; put ", state ->"; */
 
 	-- pre-calculate the sharer count here
-	cnt := MultiSetCount(i: MemNode.sharers, true);
+	cnt := MultiSetCount(i: DirNode.sharers, true);
 
 	-- default to 'processing' message,	set to false if stalling
 	msg_processed := true;
 
-	switch MemNode.state
+	switch DirNode.state
 	case M_I:
 		switch msg.mtype
 		case GetS:
-			MemNode.state := M_XS_A;
+			DirNode.state := M_XS_A;
 			AddToSharersList(msg.src);
 			-- existing sharers can be ignored since the data is read-only
-			Send(Data, msg.src, MemType, ResponseChannel, MemNode.val, UNDEFINED, 0);
+			Send(Data, msg.src, DirType, ResponseChannel, DirNode.val, UNDEFINED, 0);
 		case GetM:
-			MemNode.state := M_XM_A;
-			MemNode.owner := msg.src;
-			-- TODO: add invariant? should not be any sharers, cnt = 0
-			Send(Data, msg.src, MemType, ResponseChannel, MemNode.val, UNDEFINED, cnt);
+			DirNode.state := M_XM_A;
+			DirNode.owner := msg.src;
+			Send(Data, msg.src, DirType, ResponseChannel, DirNode.val, UNDEFINED, cnt);
 		case PutS:
-			MemNode.state := M_I_P;
-			Send(PutAck, msg.src, MemType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
-			-- TODO: why remove, should be empty? RemoveFromSharersList(msg.src);
+			DirNode.state := M_I_P;
+			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 		case PutM:
-			-- TODO: add invariant?
-			assert (msg.src != MemNode.owner) "PutM from owner";
-			MemNode.state := M_I_P;
-			Send(PutAck, msg.src, MemType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+			assert (msg.src != DirNode.owner) "PutM from owner";
+			DirNode.state := M_I_P;
+			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 		else
-			ErrorUnhandledMsg(msg, MemType);
+			ErrorUnhandledMsg(msg, DirType);
 		endswitch;
 
 	case M_S:
 		switch msg.mtype
 		case GetS:
-			MemNode.state := M_XS_A;
+			DirNode.state := M_XS_A;
 			AddToSharersList(msg.src);
 			-- existing sharers can be ignored since the data is read-only
-			Send(Data, msg.src, MemType, ResponseChannel, MemNode.val, UNDEFINED, 0);
+			Send(Data, msg.src, DirType, ResponseChannel, DirNode.val, UNDEFINED, 0);
 		case GetM:
-			MemNode.state := M_XM_A;
+			DirNode.state := M_XM_A;
 			if IsSharer(msg.src) then -- don't need to wait for yourself to Ack
-				Send(Data, msg.src, MemType, ResponseChannel, MemNode.val, UNDEFINED, cnt-1);
+				Send(Data, msg.src, DirType, ResponseChannel, DirNode.val, UNDEFINED, cnt-1);
 			else
-				Send(Data, msg.src, MemType, ResponseChannel, MemNode.val, UNDEFINED, cnt);
+				Send(Data, msg.src, DirType, ResponseChannel, DirNode.val, UNDEFINED, cnt);
 			endif;
 			SendInvReqToSharers(msg.src);
-			undefine MemNode.sharers;
-			MemNode.owner := msg.src;
+			undefine DirNode.sharers;
+			DirNode.owner := msg.src;
 		case PutS:
-			Send(PutAck, msg.src, MemType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 			if IsSharer(msg.src) then -- not necessarily a sharer
 				if cnt = 1 then
-					MemNode.state := M_I_P;
+					DirNode.state := M_I_P;
 				else
-					MemNode.state := M_S_P;
+					DirNode.state := M_S_P;
 				endif;
 				RemoveFromSharersList(msg.src);
 			else
-				MemNode.state := M_S_P;
+				DirNode.state := M_S_P;
 			endif;
 		case PutM:
-			assert (msg.src != MemNode.owner) "PutM from owner";
+			assert (msg.src != DirNode.owner) "PutM from owner";
 			RemoveFromSharersList(msg.src);
-			Send(PutAck, msg.src, MemType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
-			MemNode.state := M_S_P;
+			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+			DirNode.state := M_S_P;
 		else
-			ErrorUnhandledMsg(msg, MemType);
+			ErrorUnhandledMsg(msg, DirType);
 		endswitch;
 
 	case M_M:
-		assert (!IsUnDefined(MemNode.owner)) "owner undefined";
+		assert (!IsUnDefined(DirNode.owner)) "owner undefined";
 		switch msg.mtype
 		case GetS:
-			MemNode.state := M_MS_DA;
+			DirNode.state := M_MS_DA;
 			AddToSharersList(msg.src);
-			AddToSharersList(MemNode.owner);
-			Send(FwdGetS, MemNode.owner, MemType, ForwardChannel, UNDEFINED, msg.src, UNDEFINED);
-			undefine MemNode.owner;
+			AddToSharersList(DirNode.owner);
+			Send(FwdGetS, DirNode.owner, DirType, ForwardChannel, UNDEFINED, msg.src, UNDEFINED);
+			undefine DirNode.owner;
 		case GetM:
-			Send(FwdGetM, MemNode.owner, MemType, ForwardChannel, UNDEFINED, msg.src, UNDEFINED);
-			MemNode.owner := msg.src;
-			MemNode.state := M_XM_A;
+			Send(FwdGetM, DirNode.owner, DirType, ForwardChannel, UNDEFINED, msg.src, UNDEFINED);
+			DirNode.owner := msg.src;
+			DirNode.state := M_XM_A;
 		case PutS:
-			Send(PutAck, msg.src, MemType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
-			MemNode.state := M_M_P;
+			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+			DirNode.state := M_M_P;
 		case PutM:
-			if MemNode.owner = msg.src
+			if DirNode.owner = msg.src
 			then
-				MemNode.val := msg.val;
-				LastWrite := MemNode.val;
-				undefine MemNode.owner;
-				MemNode.state := M_I_P;
+				DirNode.val := msg.val;
+				LastWrite := DirNode.val;
+				undefine DirNode.owner;
+				DirNode.state := M_I_P;
 			else
-				MemNode.state := M_M_P;
+				DirNode.state := M_M_P;
 			endif;
-			Send(PutAck, msg.src, MemType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 		else
-			ErrorUnhandledMsg(msg, MemType);
+			ErrorUnhandledMsg(msg, DirType);
 		endswitch;
 
 	case M_MS_D:
@@ -313,27 +310,25 @@ begin
 		case GetM:
 			msg_processed := false;
 		case PutS:
-			-- TODO: why was this state stalled in last commit?
 			RemoveFromSharersList(msg.src);
-			Send(PutAck, msg.src, MemType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
-			MemNode.state := M_MS_DP
+			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+			DirNode.state := M_MS_DP
 		case PutM:
-			-- TODO: why was this state stalled in last commit?
 			RemoveFromSharersList(msg.src);
-			Send(PutAck, msg.src, MemType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
-			MemNode.state := M_MS_DP
+			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+			DirNode.state := M_MS_DP
 		case Data:
-			MemNode.state := M_S;
-			MemNode.val := msg.val;
-			LastWrite := MemNode.val;
+			DirNode.state := M_S;
+			DirNode.val := msg.val;
+			LastWrite := DirNode.val;
 		else
-			ErrorUnhandledMsg(msg, MemType);
+			ErrorUnhandledMsg(msg, DirType);
 		endswitch;
 
 	case M_XM_A:
 		switch msg.mtype
 		case DataAck:
-			MemNode.state := M_M;
+			DirNode.state := M_M;
 		else
 			msg_processed := false;
 		endswitch;
@@ -341,7 +336,7 @@ begin
 	case M_MS_DP:
 		switch msg.mtype
 		case PutAckAck:
-			MemNode.state := M_MS_D;
+			DirNode.state := M_MS_D;
 		else
 			msg_processed := false;
 		endswitch;
@@ -349,7 +344,7 @@ begin
 	case M_MS_DA:
 		switch msg.mtype
 		case DataAck:
-			MemNode.state := M_MS_D;
+			DirNode.state := M_MS_D;
 		else
 			msg_processed := false;
 		endswitch;
@@ -357,7 +352,7 @@ begin
 	case M_XS_A:
 		switch msg.mtype
 		case DataAck:
-			MemNode.state := M_S;
+			DirNode.state := M_S;
 		else
 			msg_processed := false;
 		endswitch;
@@ -365,7 +360,7 @@ begin
 	case M_I_P:
 		switch msg.mtype
 		case PutAckAck:
-			MemNode.state := M_I;
+			DirNode.state := M_I;
 		else
 			msg_processed := false;
 		endswitch;
@@ -373,7 +368,7 @@ begin
 	case M_S_P:
 		switch msg.mtype
 		case PutAckAck:
-			MemNode.state := M_S;
+			DirNode.state := M_S;
 		else
 			msg_processed := false;
 		endswitch;
@@ -381,7 +376,7 @@ begin
 	case M_M_P:
 		switch msg.mtype
 		case PutAckAck:
-			MemNode.state := M_M;
+			DirNode.state := M_M;
 		else
 			msg_processed := false;
 		endswitch;
@@ -390,7 +385,7 @@ begin
 		ErrorUnhandledState();
 	endswitch; 
 	
-	put MemNode.state;
+	/* put DirNode.state; */
 end;
 
 ---------------------------------------------------------------------------------
@@ -398,7 +393,7 @@ end;
 procedure ProcReceive(msg: Message; p: Proc);
 begin
 
-	put "Proc "; put p; put " receiving "; put msg.mtype; put " from "; put msg.src;  put ", state ->"; 
+	/* put "Proc "; put p; put " receiving "; put msg.mtype; put " from "; put msg.src;  put ", state ->"; */ 
 
 	-- default to 'processing' message.	set to false otherwise
 	msg_processed := true;
@@ -418,10 +413,10 @@ begin
 		case Inv:
 			msg_processed := false;
 		case Data:
-			if msg.src != MemType then
-				Send(DataAck, MemType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+			if msg.src != DirType then
+				Send(DataAck, DirType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 			else
-				assert (msg.ack = 0) "Non-zero ACKs"; -- TODO: add invariant?
+				assert (msg.ack = 0) "Non-zero ACKs";
 			endif;
 			Send(DataAck, msg.src, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 			pstate := P_S;
@@ -437,13 +432,13 @@ begin
 		case FwdGetM:
 			msg_processed := false;
 		case Data:
-			if msg.src = MemType then -- data is from directory controller
+			if msg.src = DirType then -- data is from directory controller
 				if msg.ack = 0 then -- no sharers, we can modify
 					Send(DataAck, msg.src, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 					pstate := P_M;
 				else -- wait on ACKs
 					if msg.ack = packs_received then -- already received OoO ACKs
-						Send(DataAck, MemType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+						Send(DataAck, DirType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 						packs_needed := 0;
 						packs_received := 0;
 						pstate := P_M;
@@ -454,7 +449,7 @@ begin
 				endif;
 			else -- data is from another processor
 				Send(DataAck, msg.src, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
-				Send(DataAck, MemType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+				Send(DataAck, DirType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 				packs_needed := 0;
 				packs_received := 0;
 				pstate := P_M;
@@ -476,7 +471,7 @@ begin
 			packs_received := packs_received + 1;
 			if packs_received = packs_needed
 			then
-				Send(DataAck, MemType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+				Send(DataAck, DirType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 				packs_needed := 0;
 				packs_received := 0;
 				pstate := P_M;
@@ -505,7 +500,7 @@ begin
 			pstate := P_IM_AD;
 			Send(InvAck, msg.src, p, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 		case Data:
-			if msg.src = MemType  then -- data is from directory controller
+			if msg.src = DirType  then -- data is from directory controller
 				if msg.ack = 0 then -- no sharers, we can modify
 					Send(DataAck, msg.src, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 					pstate := P_M;
@@ -522,7 +517,7 @@ begin
 				endif;
 			else -- data is from another processor
 				Send(DataAck, msg.src, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
-				Send(DataAck, MemType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+				Send(DataAck, DirType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 				packs_needed := 0;
 				packs_received := 0;
 				pstate := P_M;
@@ -544,7 +539,7 @@ begin
 			packs_received := packs_received + 1;
 			if packs_received = packs_needed
 			then
-				Send(DataAck, MemType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+				Send(DataAck, DirType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 				packs_needed := 0;
 				packs_received := 0;
 				pstate := P_M;
@@ -557,7 +552,7 @@ begin
 		switch msg.mtype
 		case FwdGetS:
 			pstate := P_MS_A;
-			Send(Data, MemType, p, ResponseChannel, pval, UNDEFINED, UNDEFINED);
+			Send(Data, DirType, p, ResponseChannel, pval, UNDEFINED, UNDEFINED);
 			Send(Data, msg.who, p, ResponseChannel, pval, UNDEFINED, 0);
 		case FwdGetM:
 			pstate := P_MI_AA;
@@ -571,14 +566,14 @@ begin
 		switch msg.mtype
 		case FwdGetS:
 			pstate := P_MI_SI_AA;
-			Send(Data, MemType, p, ResponseChannel, pval, UNDEFINED, UNDEFINED);
+			Send(Data, DirType, p, ResponseChannel, pval, UNDEFINED, UNDEFINED);
 			Send(Data, msg.who, p, ResponseChannel, pval, UNDEFINED, 0);
 		case FwdGetM:
 			pstate := P_MI_II_AA;
 			Send(Data, msg.who, p, ResponseChannel, pval, UNDEFINED, 0);
 		case PutAck:
 			pstate := P_I;
-			Send(PutAckAck, MemType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+			Send(PutAckAck, DirType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 			undefine pval;
 		else
 			ErrorUnhandledMsg(msg, p);
@@ -591,7 +586,7 @@ begin
 			Send(InvAck, msg.src, p, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 		case PutAck:
 			pstate := P_I;
-			Send(PutAckAck, MemType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+			Send(PutAckAck, DirType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 			undefine pval;
 		else
 			ErrorUnhandledMsg(msg, p);
@@ -601,7 +596,7 @@ begin
 		switch msg.mtype
 		case PutAck:
 			pstate := P_I;
-			Send(PutAckAck, MemType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+			Send(PutAckAck, DirType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 			undefine pval;
 		else
 			ErrorUnhandledMsg(msg, p);
@@ -656,7 +651,7 @@ begin
 		ErrorUnhandledState();
 	endswitch;
 	
-	put Procs[p].state;
+	/* put Procs[p].state; */
 	
 	endalias;
 	endalias;
@@ -675,18 +670,18 @@ ruleset n: Proc do
 	rule "Processor in Invalid state, requesting to load value"
 		(p.state = P_I)
 	==>
-		Send(GetS, MemType, n, RequestChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+		Send(GetS, DirType, n, RequestChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 		p.state := P_IS_D;
-		put n; put " sending GetS, state ->"; put p.state;
+		/* put n; put " sending GetS, state ->"; put p.state; */
 	endrule;
 
 	ruleset v: Value do
 		rule "Processor in Invalid state, requesting to store value"
 			(p.state = P_I)
 		==>
-			Send(GetM, MemType, n, RequestChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+			Send(GetM, DirType, n, RequestChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 			p.state := P_IM_AD;
-			put n; put " sending GetM, state ->"; put p.state;
+			/* put n; put " sending GetM, state ->"; put p.state; */
 		endrule;
 	endruleset;
 
@@ -694,26 +689,26 @@ ruleset n: Proc do
 		rule "Processor in Shared state, requesting to store value"
 			(p.state = P_S)
 		==>
-			Send(GetM, MemType, n, RequestChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+			Send(GetM, DirType, n, RequestChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 			p.state := P_SM_AD;
-			put n; put " sending GetM, state ->"; put p.state;
+			/* put n; put " sending GetM, state ->"; put p.state; */
 		endrule;
 	endruleset;
 
 	rule "Processor in Shared state, evicting value"
 		(p.state = P_S)
 	==>
-		Send(PutS, MemType, n, RequestChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+		Send(PutS, DirType, n, RequestChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 		p.state := P_SI_A;
-		put n; put " sending PutS, state ->"; put p.state;
+		/* put n; put " sending PutS, state ->"; put p.state; */
 	endrule;
 
 	rule "Processor in Modified state, evicting value"
 		(p.state = P_M)
 	==>
-		Send(PutM, MemType, n, RequestChannel, p.val, UNDEFINED, UNDEFINED);
+		Send(PutM, DirType, n, RequestChannel, p.val, UNDEFINED, UNDEFINED);
 		p.state := P_MI_A;
-		put n; put " sending PutM, state ->"; put p.state;
+		/* put n; put " sending PutM, state ->"; put p.state; */
 	endrule;
 
 	endalias;
@@ -734,9 +729,9 @@ ruleset n: Node do
 			(isundefined(box[msg.vc].mtype))
 		==>
 
-			if IsMember(n, Mem)
+			if IsMember(n, Dir)
 			then
-				MemReceive(msg);
+				DirReceive(msg);
 			else
 				ProcReceive(msg, n);
 			endif;
@@ -761,9 +756,9 @@ ruleset n: Node do
 		rule "receive-blocked-vc"
 			(! isundefined(InBox[n][vc].mtype))
 		==>
-			if IsMember(n, Mem)
+			if IsMember(n, Dir)
 			then
-				MemReceive(InBox[n][vc]);
+				DirReceive(InBox[n][vc]);
 			else
 				ProcReceive(InBox[n][vc], n);
 			endif;
@@ -786,12 +781,12 @@ startstate
 
 	-- mem node initialization
 	For v: Value do
-		MemNode.state := M_I;
-		undefine MemNode.owner;
-		undefine MemNode.sharers;
-		MemNode.val := v;
+		DirNode.state := M_I;
+		undefine DirNode.owner;
+		undefine DirNode.sharers;
+		DirNode.val := v;
 	endfor;
-	LastWrite := MemNode.val;
+	LastWrite := DirNode.val;
 	
 	-- processor initialization
 	for i: Proc do
@@ -810,16 +805,16 @@ endstartstate;
 ---------------------------------------------------------------------------------
 
 invariant "Invalid implies empty owner"
-	MemNode.state = M_I
+	DirNode.state = M_I
 		->
-			IsUndefined(MemNode.owner);
+			IsUndefined(DirNode.owner);
 
 ---------------------------------------------------------------------------------
 
 invariant "Value in memory matches value of last write, when invalid"
-		 MemNode.state = M_I
+		 DirNode.state = M_I
 		->
-			MemNode.val = LastWrite;
+			DirNode.val = LastWrite;
 
 ---------------------------------------------------------------------------------
 	
@@ -833,31 +828,31 @@ invariant "Value is undefined while invalid"
 ---------------------------------------------------------------------------------
 
 invariant "Modified implies empty sharers list"
-	MemNode.state = M_M
+	DirNode.state = M_M
 		->
-			MultiSetCount(i: MemNode.sharers, true) = 0;
+			MultiSetCount(i: DirNode.sharers, true) = 0;
 
 ---------------------------------------------------------------------------------
 
 invariant "Invalid implies empty sharer list"
-	MemNode.state = M_I
+	DirNode.state = M_I
 		->
-			MultiSetCount(i: MemNode.sharers, true) = 0;
+			MultiSetCount(i: DirNode.sharers, true) = 0;
 
 ---------------------------------------------------------------------------------
 
 invariant "Values in memory matches value of last write, when shared or invalid"
 	Forall n : Proc Do	
-		 MemNode.state = M_S | MemNode.state = M_I
+		 DirNode.state = M_S | DirNode.state = M_I
 		->
-			MemNode.val = LastWrite
+			DirNode.val = LastWrite
 	end;
 
 ---------------------------------------------------------------------------------
 
 invariant "Values in shared state match memory"
 	Forall n : Proc Do	
-		 MemNode.state = M_S & Procs[n].state = P_S
+		 DirNode.state = M_S & Procs[n].state = P_S
 		->
-			MemNode.val = Procs[n].val
+			DirNode.val = Procs[n].val
 	end;
