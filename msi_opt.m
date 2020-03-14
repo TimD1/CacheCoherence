@@ -5,7 +5,7 @@
 -- Constants---------------------------------------------------------------------
 ---------------------------------------------------------------------------------
 const
-	ProcCount: 2;			-- number of processors
+	ProcCount: 3;			-- number of processors
 	ValueCount:	3;			-- number of data values
 	NumVCs: 4;				-- number of virtual channels
 	RequestChannel: 0;		-- virtual channel #0
@@ -69,6 +69,7 @@ type
 				M_MS_DP,
 				M_MS_DA,
 				M_XM_A,
+				M_E_A,
 				M_XS_A,
 				M_I_P,
 				M_S_P,
@@ -221,6 +222,7 @@ begin
 		switch msg.mtype
 		case GetS:
 			DirNode.state := M_E_A;
+			DirNode.owner := msg.src;
 			Send(EData, msg.src, DirType, ResponseChannel, DirNode.val, UNDEFINED, 0);
 		case GetM:
 			DirNode.state := M_XM_A;
@@ -954,6 +956,20 @@ invariant "Shared implies non-empty sharer list"
 
 invariant "Modified implies empty sharer list"
 	DirNode.state = M_M
+		->
+			MultiSetCount(i: DirNode.sharers, true) = 0;
+
+---------------------------------------------------------------------------------
+
+invariant "Exclusive implies owner exists"
+	DirNode.state = M_E
+		->
+			!IsUndefined(DirNode.owner);
+
+---------------------------------------------------------------------------------
+
+invariant "Exclusive implies empty sharer list"
+	DirNode.state = M_E
 		->
 			MultiSetCount(i: DirNode.sharers, true) = 0;
 

@@ -3,6 +3,7 @@ Makefile
 ._*
 .DS_Store
 msi
+msi_opt
 mu
 pingpong*
 twostate*
