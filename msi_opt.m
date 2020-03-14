@@ -1,11 +1,11 @@
 
--- standard MSI protocol
+-- MESI protocol
 
 ---------------------------------------------------------------------------------
 -- Constants---------------------------------------------------------------------
 ---------------------------------------------------------------------------------
 const
-	ProcCount: 3;			-- number of processors
+	ProcCount: 2;			-- number of processors
 	ValueCount:	3;			-- number of data values
 	NumVCs: 4;				-- number of virtual channels
 	RequestChannel: 0;		-- virtual channel #0
@@ -33,11 +33,13 @@ type
 		GetM,
 		PutM,
 		PutS,
+		PutE,
 		FwdGetS,	-- ForwardChannel
 		FwdGetM,
 		Inv,
 		PutAck,		-- ResponseChannel
 		Data,		
+		EData,
 		InvAck,
 		PutAckAck,  -- OrderChannel
 		DataAck
@@ -62,6 +64,7 @@ type
 				M_I,
 				M_S,
 				M_M,
+				M_E,
 				M_MS_D,
 				M_MS_DP,
 				M_MS_DA,
@@ -69,7 +72,8 @@ type
 				M_XS_A,
 				M_I_P,
 				M_S_P,
-				M_M_P
+				M_M_P,
+				M_E_P
 			};
 			owner: Node;	
 			sharers: multiset [ProcCount] of Node;		
@@ -87,6 +91,7 @@ type
 				P_SM_AD,
 				P_SM_A,
 				P_M,
+				P_E,
 				P_MI_A,
 				P_SI_A,
 				P_II_A,
@@ -215,10 +220,8 @@ begin
 	case M_I:
 		switch msg.mtype
 		case GetS:
-			DirNode.state := M_XS_A;
-			AddToSharersList(msg.src);
-			-- existing sharers can be ignored since the data is read-only
-			Send(Data, msg.src, DirType, ResponseChannel, DirNode.val, UNDEFINED, 0);
+			DirNode.state := M_E_A;
+			Send(EData, msg.src, DirType, ResponseChannel, DirNode.val, UNDEFINED, 0);
 		case GetM:
 			DirNode.state := M_XM_A;
 			DirNode.owner := msg.src;
@@ -228,6 +231,10 @@ begin
 			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 		case PutM:
 			assert (msg.src != DirNode.owner) "PutM from owner";
+			DirNode.state := M_I_P;
+			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+		case PutE:
+			assert (msg.src != DirNode.owner) "PutE from owner";
 			DirNode.state := M_I_P;
 			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 		else
@@ -268,6 +275,11 @@ begin
 			RemoveFromSharersList(msg.src);
 			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 			DirNode.state := M_S_P;
+		case PutE:
+			assert (msg.src != DirNode.owner) "PutE from owner";
+			RemoveFromSharersList(msg.src);
+			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+			DirNode.state := M_S_P;
 		else
 			ErrorUnhandledMsg(msg, DirType);
 		endswitch;
@@ -298,6 +310,47 @@ begin
 				DirNode.state := M_M_P;
 			endif;
 			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+		case PutE:
+			assert (msg.src != DirNode.owner) "PutE from owner";
+			DirNode.state := M_M_P;
+			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+		else
+			ErrorUnhandledMsg(msg, DirType);
+		endswitch;
+
+	case M_E:
+		switch msg.mtype
+		case GetS:
+			DirNode.state := M_MS_DA;
+			AddToSharersList(msg.src);
+			AddToSharersList(DirNode.owner);
+			Send(FwdGetS, DirNode.owner, DirType, ForwardChannel, UNDEFINED, msg.src, UNDEFINED);
+			undefine DirNode.owner;
+		case GetM:
+			Send(FwdGetM, DirNode.owner, DirType, ForwardChannel, UNDEFINED, msg.src, UNDEFINED);
+			DirNode.owner := msg.src;
+			DirNode.state := M_XM_A;
+		case PutS:
+			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+			DirNode.state := M_E_P;
+		case PutM:
+			if DirNode.owner = msg.src then
+				DirNode.val := msg.val;
+				LastWrite := DirNode.val;
+				undefine DirNode.owner;
+				DirNode.state := M_I_P;
+			else
+				DirNode.state := M_E_P;
+			endif;
+			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+		case PutE:
+			if DirNode.owner = msg.src then
+				undefine DirNode.owner;
+				DirNode.state := M_I_P;
+			else
+				DirNode.state := M_E_P;
+			endif;
+			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 		else
 			ErrorUnhandledMsg(msg, DirType);
 		endswitch;
@@ -313,6 +366,12 @@ begin
 			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 			DirNode.state := M_MS_DP
 		case PutM:
+			assert (msg.src != DirNode.owner) "PutM from owner";
+			RemoveFromSharersList(msg.src);
+			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+			DirNode.state := M_MS_DP
+		case PutE:
+			assert (msg.src != DirNode.owner) "PutE from owner";
 			RemoveFromSharersList(msg.src);
 			Send(PutAck, msg.src, DirType, ResponseChannel, UNDEFINED, UNDEFINED, UNDEFINED);
 			DirNode.state := M_MS_DP
@@ -334,6 +393,14 @@ begin
 		switch msg.mtype
 		case DataAck:
 			DirNode.state := M_M;
+		else
+			msg_processed := false;
+		endswitch;
+
+	case M_E_A:
+		switch msg.mtype
+		case DataAck:
+			DirNode.state := M_E;
 		else
 			msg_processed := false;
 		endswitch;
@@ -390,6 +457,14 @@ begin
 			msg_processed := false;
 		endswitch;
 
+	case M_E_P:
+		switch msg.mtype
+		case PutAckAck:
+			DirNode.state := M_E;
+		else
+			msg_processed := false;
+		endswitch;
+
 	else
 		ErrorUnhandledState();
 	endswitch; 
@@ -421,6 +496,10 @@ begin
 		switch msg.mtype
 		case Inv:
 			msg_processed := false;
+		case EData:
+			Send(DataAck, DirType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+			pstate := P_E;
+			pval := msg.val;
 		case Data:
 			if msg.src != DirType then
 				Send(DataAck, DirType, p, OrderChannel, UNDEFINED, UNDEFINED, UNDEFINED);
@@ -571,6 +650,20 @@ begin
 			ErrorUnhandledMsg(msg, p);
 		endswitch;
 
+	case P_E:
+		switch msg.mtype
+		case FwdGetS:
+			pstate := P_MS_A;
+			Send(Data, DirType, p, ResponseChannel, pval, UNDEFINED, UNDEFINED);
+			Send(Data, msg.who, p, ResponseChannel, pval, UNDEFINED, 0);
+		case FwdGetM:
+			pstate := P_MI_AA;
+			Send(Data, msg.who, p, ResponseChannel, pval, UNDEFINED, 0);
+			undefine pval;
+		else
+			ErrorUnhandledMsg(msg, p);
+		endswitch;
+
 	case P_MI_A:
 		switch msg.mtype
 		case FwdGetS:
@@ -704,6 +797,14 @@ ruleset n: Proc do
 		endrule;
 	endruleset;
 
+	ruleset v: Value do
+		rule "Processor in Exclusive state, requesting to store value"
+			(p.state = P_E)
+		==>
+			p.state := P_M;
+		endrule;
+	endruleset;
+
 	rule "Processor in Shared state, evicting value"
 		(p.state = P_S)
 	==>
@@ -718,6 +819,14 @@ ruleset n: Proc do
 		Send(PutM, DirType, n, RequestChannel, p.val, UNDEFINED, UNDEFINED);
 		p.state := P_MI_A;
 		/* put n; put " sending PutM, state ->"; put p.state; */
+	endrule;
+
+	rule "Processor in Exclusive state, evicting value"
+		(p.state = P_E)
+	==>
+		Send(PutE, DirType, n, RequestChannel, UNDEFINED, UNDEFINED, UNDEFINED);
+		p.state := P_MI_A;
+		/* put n; put " sending PutE, state ->"; put p.state; */
 	endrule;
 
 	endalias;
