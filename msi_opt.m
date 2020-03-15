@@ -912,7 +912,7 @@ startstate
 	for i: Proc do
 		Procs[i].state := P_I;
 		undefine Procs[i].val;
-		undefine Procs[i].acks_needed;
+		Procs[i].acks_needed := 0;
 		Procs[i].acks_received := 0;
 	endfor;
 
@@ -1003,4 +1003,31 @@ invariant "Values in shared state match memory"
 		 DirNode.state = M_S & Procs[n].state = P_S
 		->
 			DirNode.val = Procs[n].val
+	end;
+
+---------------------------------------------------------------------------------
+
+invariant "Ack counters should be 0 when not waiting for Acks"
+	Forall n : Proc Do	
+		 Procs[n].state != P_IM_AD & Procs[n].state != P_IM_A & Procs[n].state != P_SM_AD & Procs[n].state != P_SM_A
+		->
+			Procs[n].acks_needed = 0 & Procs[n].acks_received = 0
+	end;
+
+---------------------------------------------------------------------------------
+
+invariant "If waiting for Data, acks_needed=0"
+	Forall n : Proc Do	
+		 Procs[n].state = P_IM_AD | Procs[n].state = P_SM_AD
+		->
+			Procs[n].acks_needed = 0
+	end;
+
+---------------------------------------------------------------------------------
+
+invariant "If waiting for Acks, acks_received < acks_needed"
+	Forall n : Proc Do	
+		 Procs[n].state = P_IM_A | Procs[n].state = P_SM_A
+		->
+			Procs[n].acks_needed > Procs[n].acks_received
 	end;
