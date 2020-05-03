@@ -7,11 +7,11 @@
 
 <b>MSI:</b>
 <div style='text-align:center'>
-<img src='https://github.com/TimD1/CacheCoherence/img/msi_proc.png'></img>
-<img src='https://github.com/TimD1/CacheCoherence/img/msi_dir.png'></img>
+<img src='https://github.com/TimD1/CacheCoherence/blob/master/img/msi_proc.png'></img>
+<img src='https://github.com/TimD1/CacheCoherence/blob/master/img/msi_dir.png'></img>
 </div>
 <b>MESI:</b>
 <div style='text-align:center'>
-<img src='https://github.com/TimD1/CacheCoherence/img/mesi_proc.png'></img>
-<img src='https://github.com/TimD1/CacheCoherence/img/mesi_dir.png'></img>
+<img src='https://github.com/TimD1/CacheCoherence/blob/master/img/mesi_proc.png'></img>
+<img src='https://github.com/TimD1/CacheCoherence/blob/master/img/mesi_dir.png'></img>
 </div>
